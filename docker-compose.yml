@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Frontend Next.js 14 Dashboard
+  manga-studio-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mangatok-studio-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - manga-studio-app
+    restart: unless-stopped
+
+  # Service standard MangaTok Studio (Backend FastAPI / Profil Research)
+  manga-studio-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mangatok-studio-app
+    ports:
+      - "8000:8000"
+    environment:
+      - DEPLOYMENT_PROFILE=research
+      - TERRITORY=EU
+      - ENABLE_BEDROCK=false
+      - ENABLE_H3_LOCAL=false
+      - ALLOW_REMOTE_DATA_TRANSFER=false
+      - MAX_MONTHLY_BUDGET_USD=10.0
+      - MAX_RUN_BUDGET_USD=2.0
+      - VRAM_CEILING_GB=22.0
+    volumes:
+      - ./output:/app/output
+      - ./demo_output:/app/demo_output
+      - ./tests/fixtures:/app/fixtures:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Service GPU Accéléré (RTX 4090 / CUDA 12.4)
+  manga-studio-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: mangatok-studio-gpu
+    ports:
+      - "8001:8000"
+    environment:
+      - DEPLOYMENT_PROFILE=research
+      - TERRITORY=EU
+      - ENABLE_BEDROCK=false
+      - ENABLE_H3_LOCAL=false
+      - ALLOW_REMOTE_DATA_TRANSFER=false
+      - VRAM_CEILING_GB=22.0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./output:/app/output
+      - ./demo_output:/app/demo_output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    profiles:
+      - gpu

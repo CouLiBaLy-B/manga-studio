@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+dist/
+build/
+demo_output/
+output/
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/
+

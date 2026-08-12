@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CharacterSheetSchema",
+  "description": "Schéma de validation canonique pour les Fiches Personnages verrouillées",
+  "type": "object",
+  "required": [
+    "character_id",
+    "nom",
+    "role",
+    "source_image_ids",
+    "description_physique",
+    "traits_caractere",
+    "voix_suggeree",
+    "style_constraints",
+    "locked"
+  ],
+  "properties": {
+    "character_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "nom": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "type": "string"
+    },
+    "source_image_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "description_physique": {
+      "type": "object",
+      "required": [
+        "silhouette",
+        "visage",
+        "peau",
+        "coiffure",
+        "tenue",
+        "couleurs_hex",
+        "accessoires_signature"
+      ],
+      "properties": {
+        "silhouette": { "type": "string" },
+        "visage": { "type": "string" },
+        "peau": { "type": "string" },
+        "coiffure": { "type": "string" },
+        "tenue": { "type": "string" },
+        "couleurs_hex": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
+          }
+        },
+        "accessoires_signature": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "traits_caractere": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "voix_suggeree": {
+      "type": "object",
+      "required": ["langue", "ton"],
+      "properties": {
+        "langue": { "type": "string" },
+        "ton": { "type": "string" }
+      }
+    },
+    "style_constraints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "locked": {
+      "type": "boolean",
+      "enum": [true]
+    }
+  }
+}
