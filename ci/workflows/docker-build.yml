@@ -1,0 +1,40 @@
+name: Docker Container Build
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docker:
+    name: Build and Validate Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker CPU image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: mangatok-studio:latest
+          load: true
+
+      - name: Smoke test Docker container
+        run: |
+          docker run -d --name test-mangatok -p 8000:8000 mangatok-studio:latest
+          sleep 5
+          docker logs test-mangatok
+          curl -f http://localhost:8000/api/status
+          docker stop test-mangatok
+          docker rm test-mangatok
