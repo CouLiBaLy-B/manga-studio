@@ -2,18 +2,21 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from manga_studio.core.models.character import CharacterBible
 from manga_studio.core.models.config import DeploymentProfile, TalePipelineConfig
+from manga_studio.core.models.storyboard import AudioScriptItem, Storyboard, StoryboardSegment, TransitionConfig
+from manga_studio.core.prompt_builder import PromptBuilder
 from manga_studio.pipeline.runner import AnimatedTalePipelineRunner
 
 app = FastAPI(
     title="MangaTok Studio — Mode « Conte animé » API",
     description="Service de génération vidéo TikTok/Reels avec cohérence visuelle et fiches canoniques",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 app.add_middleware(
@@ -38,22 +41,39 @@ class TaleRunRequest(BaseModel):
     )
 
 
+class SegmentUpdateRequest(BaseModel):
+    titre: Optional[str] = None
+    frame: Optional[str] = None
+    prompt_ia: Optional[str] = None
+    duree_s: Optional[float] = None
+    emotion: Optional[str] = None
+    plan: Optional[str] = None
+    decor: Optional[str] = None
+    audio_dialogues: Optional[List[Dict[str, str]]] = None
+
+
+class SegmentsReorderRequest(BaseModel):
+    scene_ids_in_order: List[str]
+
+
 @app.get("/api/status")
 def get_status() -> Dict[str, Any]:
     """Retourne l'état de santé du studio et des ressources GPU."""
     return {
         "status": "HEALTHY",
         "mode": "Conte animé",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "gpu_ceiling_gb": 22.0,
-        "default_profile": "research"
+        "default_profile": "research",
+        "human_in_the_loop_enabled": True
     }
 
 
 @app.get("/api/runs/{story_id}/bible")
 def get_character_bible(story_id: str):
     """Retourne la bible canonique verrouillée du run."""
-    bible_path = DEFAULT_OUTPUT_DIR / "character_bible.json"
+    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    bible_path = run_dir / "character_bible.json"
     if not bible_path.exists():
         raise HTTPException(status_code=404, detail="Bible non trouvée")
     return json.loads(bible_path.read_text(encoding="utf-8"))
@@ -62,16 +82,95 @@ def get_character_bible(story_id: str):
 @app.get("/api/runs/{story_id}/storyboard")
 def get_storyboard(story_id: str):
     """Retourne le storyboard validé du run."""
-    sb_path = DEFAULT_OUTPUT_DIR / "storyboard.validated.json"
+    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    sb_path = run_dir / "storyboard.validated.json"
+    if not sb_path.exists():
+        sb_path = run_dir / "storyboard.json"
     if not sb_path.exists():
         raise HTTPException(status_code=404, detail="Storyboard non trouvé")
     return json.loads(sb_path.read_text(encoding="utf-8"))
 
 
+@app.put("/api/runs/{story_id}/segments/{scene_id}")
+def update_segment(story_id: str, scene_id: str, req: SegmentUpdateRequest):
+    """Met à jour un segment du storyboard (Human-in-the-Loop)."""
+    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    sb_path = run_dir / "storyboard.validated.json"
+    if not sb_path.exists():
+        sb_path = run_dir / "storyboard.json"
+    if not sb_path.exists():
+        raise HTTPException(status_code=404, detail="Storyboard introuvable pour ce conte")
+
+    sb_data = json.loads(sb_path.read_text(encoding="utf-8"))
+    storyboard = Storyboard.model_validate(sb_data)
+
+    target_seg = None
+    for seg in storyboard.segments:
+        if seg.scene_id == scene_id:
+            target_seg = seg
+            break
+
+    if not target_seg:
+        raise HTTPException(status_code=404, detail=f"Scène '{scene_id}' introuvable dans le storyboard")
+
+    if req.titre is not None:
+        target_seg.titre = req.titre
+    if req.frame is not None:
+        target_seg.frame = req.frame
+    if req.prompt_ia is not None:
+        target_seg.prompt_ia = req.prompt_ia
+    if req.duree_s is not None:
+        target_seg.duree_s = req.duree_s
+    if req.emotion is not None:
+        target_seg.emotion = req.emotion
+    if req.plan is not None:
+        target_seg.plan = req.plan
+    if req.decor is not None:
+        target_seg.decor = req.decor
+    if req.audio_dialogues is not None:
+        target_seg.audio_script = [
+            AudioScriptItem(speaker=d.get("speaker", "Narrateur"), kind="dialogue", text=d.get("text", ""))
+            for d in req.audio_dialogues
+        ]
+
+    # Sauvegarde et revalidation
+    validated_sb = storyboard.model_validate(storyboard.model_dump())
+    sb_path.write_text(validated_sb.model_dump_json(indent=2), encoding="utf-8")
+    return {"status": "UPDATED", "scene_id": scene_id, "segment": target_seg.model_dump()}
+
+
+@app.post("/api/runs/{story_id}/reorder")
+def reorder_segments(story_id: str, req: SegmentsReorderRequest):
+    """Réordonne les segments du storyboard."""
+    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    sb_path = run_dir / "storyboard.validated.json"
+    if not sb_path.exists():
+        sb_path = run_dir / "storyboard.json"
+    if not sb_path.exists():
+        raise HTTPException(status_code=404, detail="Storyboard introuvable")
+
+    sb_data = json.loads(sb_path.read_text(encoding="utf-8"))
+    storyboard = Storyboard.model_validate(sb_data)
+    seg_map = {s.scene_id: s for s in storyboard.segments}
+
+    new_segments = []
+    for idx, sid in enumerate(req.scene_ids_in_order, start=1):
+        if sid in seg_map:
+            seg = seg_map[sid]
+            seg.ordre = idx
+            new_segments.append(seg)
+
+    storyboard.segments = new_segments
+    revalidated = storyboard.model_validate(storyboard.model_dump())
+    sb_path.write_text(revalidated.model_dump_json(indent=2), encoding="utf-8")
+    return {"status": "REORDERED", "total_segments": len(new_segments)}
+
+
 @app.get("/api/runs/{story_id}/qc")
 def get_qc_reports(story_id: str):
     """Retourne l'ensemble des rapports QC du run."""
-    qc_dir = DEFAULT_OUTPUT_DIR / "qc"
+    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    qc_dir = run_dir / "qc"
     if not qc_dir.exists():
         return []
     reports = []
@@ -83,7 +182,8 @@ def get_qc_reports(story_id: str):
 @app.get("/api/runs/{story_id}/manifest")
 def get_manifest_events(story_id: str):
     """Retourne le flux des événements de traçabilité."""
-    manifest_file = DEFAULT_OUTPUT_DIR / "manifests" / "render_manifest.jsonl"
+    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    manifest_file = run_dir / "manifests" / "render_manifest.jsonl"
     if not manifest_file.exists():
         return []
     events = []
@@ -129,7 +229,7 @@ def trigger_generation(req: TaleRunRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
-    """Tableau de bord HTML moderne pour visualiser le mode Conte animé."""
+    """Tableau de bord interactif avec éditeur de storyboard Human-in-the-Loop."""
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -149,6 +249,7 @@ def serve_dashboard():
       --text-muted: #9CA3AF;
       --success: #10B981;
       --warning: #F59E0B;
+      --danger: #EF4444;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -177,7 +278,7 @@ def serve_dashboard():
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
       gap: 20px;
     }
     .card {
@@ -202,7 +303,7 @@ def serve_dashboard():
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.85rem;
       color: #E2E8F0;
-      max-height: 240px;
+      max-height: 260px;
       overflow-y: auto;
       white-space: pre-wrap;
     }
@@ -210,13 +311,16 @@ def serve_dashboard():
       background: #181B2B;
       border: 1px solid #272C45;
       border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
     }
     .scene-title {
       font-weight: 700;
       color: var(--accent);
-      margin-bottom: 4px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
     .tag {
       display: inline-block;
@@ -231,22 +335,37 @@ def serve_dashboard():
     .btn {
       background: var(--primary);
       color: #000;
-      padding: 10px 18px;
-      border-radius: 8px;
+      padding: 8px 14px;
+      border-radius: 6px;
       font-weight: 700;
       border: none;
       cursor: pointer;
-      font-size: 0.95rem;
+      font-size: 0.85rem;
       transition: opacity 0.2s;
     }
     .btn:hover { opacity: 0.85; }
+    .btn-secondary {
+      background: #272C45;
+      color: #E2E8F0;
+    }
+    input, textarea, select {
+      width: 100%;
+      background: #0D0E15;
+      border: 1px solid #272C45;
+      color: #FFF;
+      padding: 8px;
+      border-radius: 6px;
+      font-family: inherit;
+      margin-top: 4px;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <div>
       <h1>⚡ MangaTok Studio</h1>
-      <p style="color: var(--text-muted);">Mode « Conte animé » — Orchestrateur Hexagonal & LangGraph</p>
+      <p style="color: var(--text-muted);">Mode « Conte animé » — Éditeur Interactif & LangGraph</p>
     </div>
     <span class="badge">PROD RESEARCH // 22GB VRAM GUARD ACTIVE</span>
   </div>
@@ -258,10 +377,10 @@ def serve_dashboard():
       <div id="bible-content" class="code-box">Chargement de la bible...</div>
     </div>
 
-    <!-- Storyboard Interactif -->
+    <!-- Storyboard Interactif & Éditeur -->
     <div class="card" style="grid-column: span 2;">
-      <h2>🎬 Storyboard Structuré & Continuité</h2>
-      <div id="storyboard-content" style="max-height: 380px; overflow-y: auto;">Chargement du storyboard...</div>
+      <h2>🎬 Storyboard Interactif (Human-in-the-Loop)</h2>
+      <div id="storyboard-content" style="max-height: 420px; overflow-y: auto;">Chargement du storyboard...</div>
     </div>
 
     <!-- Contrôle Qualité -->
@@ -278,6 +397,8 @@ def serve_dashboard():
   </div>
 
   <script>
+    let currentStoryboard = null;
+
     async function loadData() {
       try {
         const bibleRes = await fetch('/api/runs/conte/bible');
@@ -288,25 +409,8 @@ def serve_dashboard():
 
         const sbRes = await fetch('/api/runs/conte/storyboard');
         if (sbRes.ok) {
-          const sb = await sbRes.json();
-          const sbDiv = document.getElementById('storyboard-content');
-          sbDiv.innerHTML = '';
-          sb.segments.forEach(seg => {
-            const card = document.createElement('div');
-            card.className = 'scene-card';
-            card.innerHTML = `
-              <div class="scene-title">#${seg.ordre} ${seg.scene_id} — ${seg.titre}</div>
-              <p style="font-size: 0.88rem; color: #CBD5E1; margin: 4px 0;"><strong>Action:</strong> ${seg.frame}</p>
-              <p style="font-size: 0.82rem; color: #94A3B8;"><strong>Prompt IA (EN):</strong> ${seg.prompt_ia}</p>
-              <div style="margin-top: 8px;">
-                <span class="tag">⏱️ ${seg.duree_s}s</span>
-                <span class="tag">🎭 ${seg.emotion}</span>
-                <span class="tag">📐 ${seg.plan}</span>
-                <span class="tag">✨ ${seg.transition.type} (${seg.transition.duration_s}s)</span>
-              </div>
-            `;
-            sbDiv.appendChild(card);
-          });
+          currentStoryboard = await sbRes.json();
+          renderStoryboardUI(currentStoryboard);
         }
 
         const qcRes = await fetch('/api/runs/conte/qc');
@@ -324,6 +428,78 @@ def serve_dashboard():
         console.error('Erreur chargement:', err);
       }
     }
+
+    function renderStoryboardUI(sb) {
+      const sbDiv = document.getElementById('storyboard-content');
+      sbDiv.innerHTML = '';
+      sb.segments.forEach(seg => {
+        const card = document.createElement('div');
+        card.className = 'scene-card';
+        card.innerHTML = `
+          <div class="scene-title">
+            <span>#${seg.ordre} ${seg.scene_id} — ${seg.titre}</span>
+            <button class="btn btn-secondary" onclick="toggleEdit('${seg.scene_id}')">✏️ Modifier</button>
+          </div>
+          <div id="view-${seg.scene_id}">
+            <p style="font-size: 0.88rem; color: #CBD5E1; margin: 4px 0;"><strong>Action :</strong> ${seg.frame}</p>
+            <p style="font-size: 0.82rem; color: #94A3B8;"><strong>Prompt IA :</strong> ${seg.prompt_ia}</p>
+            <div style="margin-top: 8px;">
+              <span class="tag">⏱️ ${seg.duree_s}s</span>
+              <span class="tag">🎭 ${seg.emotion}</span>
+              <span class="tag">📐 ${seg.plan}</span>
+              <span class="tag">✨ ${seg.transition.type}</span>
+            </div>
+          </div>
+          <div id="edit-${seg.scene_id}" style="display: none; margin-top: 10px;">
+            <label style="font-size: 0.8rem; color: var(--primary);">Titre de la scène :</label>
+            <input type="text" id="input-title-${seg.scene_id}" value="${seg.titre}">
+            <label style="font-size: 0.8rem; color: var(--primary);">Action descriptive (FR) :</label>
+            <textarea id="input-frame-${seg.scene_id}" rows="2">${seg.frame}</textarea>
+            <label style="font-size: 0.8rem; color: var(--primary);">Prompt IA (EN) :</label>
+            <textarea id="input-prompt-${seg.scene_id}" rows="3">${seg.prompt_ia}</textarea>
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <button class="btn" onclick="saveSegmentEdit('${seg.scene_id}')">💾 Enregistrer</button>
+              <button class="btn btn-secondary" onclick="toggleEdit('${seg.scene_id}')">Annuler</button>
+            </div>
+          </div>
+        `;
+        sbDiv.appendChild(card);
+      });
+    }
+
+    function toggleEdit(sceneId) {
+      const viewEl = document.getElementById(`view-${sceneId}`);
+      const editEl = document.getElementById(`edit-${sceneId}`);
+      if (editEl.style.display === 'none') {
+        editEl.style.display = 'block';
+        viewEl.style.display = 'none';
+      } else {
+        editEl.style.display = 'none';
+        viewEl.style.display = 'block';
+      }
+    }
+
+    async function saveSegmentEdit(sceneId) {
+      const titre = document.getElementById(`input-title-${sceneId}`).value;
+      const frame = document.getElementById(`input-frame-${sceneId}`).value;
+      const prompt_ia = document.getElementById(`input-prompt-${sceneId}`).value;
+
+      try {
+        const res = await fetch(`/api/runs/conte/segments/${sceneId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ titre, frame, prompt_ia })
+        });
+        if (res.ok) {
+          await loadData();
+        } else {
+          alert('Erreur lors de la mise à jour du segment.');
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
     loadData();
   </script>
 </body>
