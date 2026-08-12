@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Service de serving de modèles IA (SGLang / Local DiT / VAE / French TTS)
+  manga-model-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: mangatok-model-server
+    command: ["uvicorn", "manga_studio.api.app:app", "--host", "0.0.0.0", "--port", "30010"]
+    ports:
+      - "30010:30010"
+    environment:
+      - VRAM_CEILING_GB=22.0
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DEPLOYMENT_PROFILE=research
+      - TERRITORY=EU
+      - MODEL_CACHE_DIR=/app/models_cache
+    volumes:
+      - ./models_cache:/app/models_cache
+      - ./output:/app/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:30010/api/status"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mangatok-net
+
+  # Studio Applicatif principal relié au serveur de modèles
+  manga-studio-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mangatok-studio-app
+    depends_on:
+      manga-model-server:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - DEPLOYMENT_PROFILE=research
+      - TERRITORY=EU
+      - MODEL_SERVER_URL=http://manga-model-server:30010
+      - ENABLE_BEDROCK=false
+      - ENABLE_H3_LOCAL=false
+      - ALLOW_REMOTE_DATA_TRANSFER=false
+      - VRAM_CEILING_GB=22.0
+    volumes:
+      - ./output:/app/output
+      - ./demo_output:/app/demo_output
+      - ./tests/fixtures:/app/fixtures:ro
+    restart: unless-stopped
+    networks:
+      - mangatok-net
+
+networks:
+  mangatok-net:
+    driver: bridge
