@@ -10,6 +10,7 @@ from .model_registry import ModelRegistryPort, ModelMetadata
 from .license_guard import LicenseGuardPort, GuardDecision, LicenseViolationError
 from .cost_estimator import CostEstimatorPort, CostEstimate, BudgetExceededError
 from .artifact_store import ArtifactStorePort
+from .lipsync import LipSyncPort
 
 __all__ = [
     "CharacterSheetExtractorPort",
@@ -27,4 +28,5 @@ __all__ = [
     "CostEstimate",
     "BudgetExceededError",
     "ArtifactStorePort",
+    "LipSyncPort",
 ]
