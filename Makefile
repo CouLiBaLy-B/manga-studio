@@ -30,7 +30,16 @@ test: ## Exécute la suite complète de tests hors-ligne
 .PHONY: test-cov
 test-cov: ## Exécute les tests avec rapport de couverture de code
 	@echo "==> Exécution des tests avec couverture..."
-	$(PYTEST) --cov=manga_studio --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+	$(PYTEST) --cov=manga_studio --cov-report=term-missing --cov-report=xml --cov-report=json --cov-fail-under=85
+	$(PYTHON) scripts/check_critical_coverage.py coverage.json
+
+.PHONY: prune-artifacts
+prune-artifacts: ## Liste les artefacts expirés sans les supprimer (rétention 30 jours)
+	$(PYTHON) scripts/prune_artifacts.py --older-than-days $${RETENTION_DAYS:-30}
+
+.PHONY: prune-artifacts-confirm
+prune-artifacts-confirm: ## Supprime les artefacts expirés après contrôle (RETENTION_DAYS=30 par défaut)
+	$(PYTHON) scripts/prune_artifacts.py --older-than-days $${RETENTION_DAYS:-30} --confirm
 
 .PHONY: validate-schemas
 validate-schemas: ## Valide les modèles Pydantic et schémas JSON

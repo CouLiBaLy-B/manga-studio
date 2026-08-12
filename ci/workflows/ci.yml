@@ -42,7 +42,9 @@ jobs:
           print('Domain models imported successfully.')
           "
       - name: Run tests with coverage
-        run: pytest --cov=manga_studio --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+        run: pytest --cov=manga_studio --cov-report=term-missing --cov-report=xml --cov-report=json --cov-fail-under=85
+      - name: Verify targeted critical-module coverage
+        run: python scripts/check_critical_coverage.py coverage.json
       - name: Verify end-to-end CLI run
         run: |
           python -m manga_studio.cli.main \
