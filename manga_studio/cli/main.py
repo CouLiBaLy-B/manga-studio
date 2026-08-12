@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Territoire de déploiement ISO (défaut: EU)."
     )
     parser.add_argument(
+        "--style-preset",
+        type=str,
+        default="watercolor_mythology",
+        help="Preset stylistique manga (shonen_epic, seinen_dark_fantasy, ghibli_poetic, cyberpunk_neo_tokyo, watercolor_mythology)."
+    )
+    parser.add_argument(
         "--enable-bedrock",
         action="store_true",
         default=False,
@@ -91,6 +97,7 @@ def main(args=None) -> int:
         output_dir=parsed_args.output_dir,
         profile=profile,
         territory=parsed_args.territory,
+        style_preset=parsed_args.style_preset,
         enable_bedrock=parsed_args.enable_bedrock,
         enable_h3_local=parsed_args.enable_h3_local,
         allow_remote_data_transfer=parsed_args.allow_remote_transfer

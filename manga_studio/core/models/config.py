@@ -37,6 +37,7 @@ class TalePipelineConfig(BaseModel):
     gpu_device_id: int = Field(default=0, ge=0, description="Index du GPU CUDA")
 
     # Paramètres de Génération & Style
+    style_preset: str = Field(default="watercolor_mythology", description="Clé du preset stylistique manga")
     style_suffix: str = Field(
         default="epic anime style, consistent character design, cinematic composition, no text artifacts",
         description="Suffixe de prompt invariable pour la cohérence stylistique"
