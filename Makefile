@@ -45,8 +45,28 @@ run-demo: ## Lance une génération complète sur le conte de démonstration (My
 
 .PHONY: serve
 serve: ## Démarre le serveur FastAPI et le tableau de bord Web sur le port 8000
-	@echo "==> Démarrage du studio Web MangaTok sur http://0.0.0.0:8000..."
+	@echo "==> Démarrage du studio Web FastAPI sur http://0.0.0.0:8000..."
 	$(UVICORN) manga_studio.api.app:app --host 0.0.0.0 --port 8000 --reload
+
+.PHONY: frontend-install
+frontend-install: ## Installe les dépendances du frontend Next.js
+	@echo "==> Installation des dépendances Next.js..."
+	cd frontend && npm install
+
+.PHONY: frontend-build
+frontend-build: ## Compile le frontend Next.js pour la production
+	@echo "==> Compilation du frontend Next.js..."
+	cd frontend && npm run build
+
+.PHONY: frontend-dev
+frontend-dev: ## Lance le serveur de développement Next.js (port 3000)
+	@echo "==> Démarrage du frontend Next.js sur http://0.0.0.0:3000..."
+	cd frontend && npm run dev
+
+.PHONY: frontend-start
+frontend-start: ## Lance le frontend Next.js en mode production (port 3000)
+	@echo "==> Démarrage du frontend Next.js en production sur http://0.0.0.0:3000..."
+	cd frontend && npm run start
 
 .PHONY: docker-build
 docker-build: ## Compile l'image Docker standard (CPU / Production)

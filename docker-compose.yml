@@ -1,7 +1,19 @@
 version: '3.8'
 
 services:
-  # Service standard MangaTok Studio (Profil Research / Fallback & Mock)
+  # Frontend Next.js 14 Dashboard
+  manga-studio-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mangatok-studio-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - manga-studio-app
+    restart: unless-stopped
+
+  # Service standard MangaTok Studio (Backend FastAPI / Profil Research)
   manga-studio-app:
     build:
       context: .
