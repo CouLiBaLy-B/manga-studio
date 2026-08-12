@@ -59,6 +59,7 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
   
   // États d'exécution et données
   const [isGenerating, setIsGenerating] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [generationStep, setGenerationStep] = useState(0);
   const [generationLogs, setGenerationLogs] = useState<string[]>([]);
   const [bibleData, setBibleData] = useState<any>(null);
@@ -151,6 +152,46 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
     }
   };
 
+  useEffect(() => {
+    if (!activeJobId) return;
+
+    const pollJob = async () => {
+      try {
+        const response = await fetch(`/api/jobs/${activeJobId}`);
+        if (!response.ok) throw new Error('Impossible de consulter le job');
+        const job = await response.json();
+        if (typeof job.progress === 'number') {
+          setGenerationStep(Math.max(1, Math.min(7, Math.ceil(job.progress / 100 * 7))));
+        }
+        setGenerationLogs(prev => {
+          const message = `[Job ${job.status}] ${job.stage || 'en attente'}`;
+          return prev[prev.length - 1] === message ? prev : [...prev, message];
+        });
+        if (job.status === 'completed') {
+          setGenerationStep(7);
+          setGenerationLogs(prev => [...prev, '[Finalisé] Génération terminée avec succès.']);
+          await fetchRunData(storyId);
+          setActiveTab('player');
+          setActiveJobId(null);
+          setIsGenerating(false);
+        } else if (job.status === 'failed' || job.status === 'cancelled') {
+          setGenerationLogs(prev => [...prev, `[Erreur] ${job.error || 'Génération annulée.'}`]);
+          setActiveJobId(null);
+          setIsGenerating(false);
+        }
+      } catch (error) {
+        console.error(error);
+        setGenerationLogs(prev => [...prev, '[Erreur] Suivi du job indisponible.']);
+        setActiveJobId(null);
+        setIsGenerating(false);
+      }
+    };
+
+    pollJob();
+    const interval = window.setInterval(pollJob, 1500);
+    return () => window.clearInterval(interval);
+  }, [activeJobId, storyId]);
+
   const protectedHeaders = () => apiKey ? { 'X-API-Key': apiKey } : {};
 
   const copyToClipboard = (text: string, key: string) => {
@@ -190,35 +231,20 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
     });
 
     try {
-      let currentS = 1;
-      const interval = setInterval(() => {
-        if (currentS < 6) {
-          currentS += 1;
-          setGenerationStep(currentS);
-          setGenerationLogs(prev => [...prev, `[Étape ${currentS}/7] ${pipelineSteps[currentS - 1].title}`]);
-        }
-      }, 450);
-
       const res = await fetch('/api/upload-and-run', {
         method: 'POST',
         headers: protectedHeaders(),
         body: formData,
       });
-
-      clearInterval(interval);
-      setGenerationStep(7);
-      setGenerationLogs(prev => [...prev, '[Finalize] Génération terminée avec succès (Statut COMPLETED)']);
-
-      if (res.ok) {
-        await fetchRunData(storyId);
-        setTimeout(() => setActiveTab('player'), 600);
-      } else {
-        alert('Erreur lors de la génération.');
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.job_id) {
+        throw new Error(payload?.detail || 'La génération n’a pas pu être placée en file.');
       }
+      setActiveJobId(payload.job_id);
+      setGenerationLogs(prev => [...prev, `[File] Job ${payload.job_id} créé.`]);
     } catch (err) {
       console.error(err);
-      alert('Erreur de connexion au serveur API.');
-    } finally {
+      setGenerationLogs(prev => [...prev, `[Erreur] ${err instanceof Error ? err.message : 'Connexion au serveur impossible.'}`]);
       setIsGenerating(false);
     }
   };

@@ -20,18 +20,9 @@ RUN groupadd -g 1000 mangatok && \
 
 WORKDIR /app
 
-# Copie et installation des dépendances Python
+# Outils de packaging ; les dépendances runtime sont déclarées dans pyproject.toml.
 COPY pyproject.toml pytest.ini ./
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir \
-        fastapi \
-        uvicorn \
-        httpx \
-        pydantic>=2.0.0 \
-        pillow>=9.0.0 \
-        jinja2>=3.0.0 \
-        pytest>=7.0.0 \
-        pytest-cov>=4.0.0
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # Copie du code source et des artefacts
 COPY manga_studio/ ./manga_studio/
@@ -41,8 +32,8 @@ COPY docs/ ./docs/
 COPY tests/ ./tests/
 COPY README.md ./
 
-# Installation du package en mode local
-RUN pip install --no-cache-dir -e .
+# Installation du package et de ses dépendances runtime verrouillées par pyproject.toml
+RUN pip install --no-cache-dir .
 
 # Création du dossier d'artefacts avec permissions appropriées
 RUN mkdir -p /app/output /app/demo_output && \

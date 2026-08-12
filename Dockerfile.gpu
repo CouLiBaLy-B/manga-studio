@@ -36,19 +36,10 @@ WORKDIR /app
 
 COPY pyproject.toml pytest.ini ./
 
-# Installation des dépendances Python & PyTorch CUDA 12.4
+# Installation des outils de packaging et de PyTorch CUDA 12.4.
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
     python3 -m pip install --no-cache-dir \
-        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
-    python3 -m pip install --no-cache-dir \
-        fastapi \
-        uvicorn \
-        httpx \
-        pydantic>=2.0.0 \
-        pillow>=9.0.0 \
-        jinja2>=3.0.0 \
-        pytest>=7.0.0 \
-        pytest-cov>=4.0.0
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 COPY manga_studio/ ./manga_studio/
 COPY schemas/ ./schemas/
@@ -57,7 +48,7 @@ COPY docs/ ./docs/
 COPY tests/ ./tests/
 COPY README.md ./
 
-RUN python3 -m pip install --no-cache-dir -e .
+RUN python3 -m pip install --no-cache-dir .
 
 RUN mkdir -p /app/output /app/demo_output && \
     chown -R mangatok:mangatok /app

@@ -2,6 +2,7 @@
 
 import hmac
 import json
+from io import BytesIO
 import os
 import re
 import shutil
@@ -9,13 +10,16 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from redis.exceptions import RedisError
+from rq.exceptions import NoSuchJobError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from manga_studio.core.cover_generator import CoverPosterGenerator
 from manga_studio.core.kinetic_subtitles import KineticSubtitleGenerator
 from manga_studio.core.models.character import CharacterBible
-from manga_studio.core.models.config import DeploymentProfile, TalePipelineConfig
+from manga_studio.core.models.config import DeploymentProfile
 from manga_studio.core.models.storyboard import AudioScriptItem, Storyboard, StoryboardSegment
 from manga_studio.core.multiformat_exporter import MultiFormatExporter
 from manga_studio.core.prompt_builder import PromptBuilder
@@ -27,7 +31,7 @@ from manga_studio.core.runtime_config import (
     OUTPUT_ROOT,
     configured_cors_origins,
 )
-from manga_studio.pipeline.runner import AnimatedTalePipelineRunner
+from manga_studio.jobs import cancel_job, enqueue_generation, get_job, job_response
 
 app = FastAPI(
     title="MangaTok Studio — Mode « Conte animé » API",
@@ -102,6 +106,44 @@ class TaleRunRequest(BaseModel):
     territory: str = Field(default="EU", description="Code territoire ISO")
     style_preset: str = Field(default="watercolor_mythology", description="Clé du preset de style")
     style_suffix: Optional[str] = None
+
+
+def _generation_payload(
+    *,
+    story_id: str,
+    story_path: Path,
+    characters_dir: Path,
+    output_dir: Path,
+    profile: DeploymentProfile,
+    territory: str,
+    style_preset: str,
+    style_suffix: str,
+) -> dict[str, str]:
+    """Construit le contrat sérialisable transmis au worker RQ."""
+    return {
+        "story_id": story_id,
+        "story_path": str(story_path),
+        "characters_dir": str(characters_dir),
+        "output_dir": str(output_dir),
+        "profile": profile.value,
+        "territory": territory,
+        "style_preset": style_preset,
+        "style_suffix": style_suffix,
+    }
+
+
+def _enqueue_or_503(payload: dict[str, str]) -> dict[str, Any]:
+    """Soumet un job et masque les détails de connectivité Redis au client."""
+    try:
+        job = enqueue_generation(payload)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="File de génération indisponible.") from exc
+    return {
+        "job_id": job.id,
+        "status": "queued",
+        "story_id": payload["story_id"],
+        "status_url": f"/api/jobs/{job.id}",
+    }
 
 
 class SegmentUpdateRequest(BaseModel):
@@ -311,7 +353,7 @@ def get_subtitles_file(story_id: str, ext: str):
     return FileResponse(sub_path, media_type=media_type, filename=f"{story_id}.{ext}")
 
 
-@app.post("/api/upload-and-run")
+@app.post("/api/upload-and-run", status_code=202)
 async def upload_and_run(
     _: None = Depends(require_api_key),
     story_id: str = Form("conte_custom"),
@@ -353,6 +395,11 @@ async def upload_and_run(
                 raise HTTPException(status_code=413, detail="Image trop volumineuse.")
             if not content:
                 raise HTTPException(status_code=422, detail="Image vide.")
+            try:
+                with Image.open(BytesIO(content)) as image:
+                    image.verify()
+            except (UnidentifiedImageError, OSError) as exc:
+                raise HTTPException(status_code=422, detail="Le contenu uploadé n'est pas une image valide.") from exc
 
             target_file = (chars_dir / filename).resolve()
             if not target_file.is_relative_to(chars_dir.resolve()):
@@ -368,32 +415,21 @@ async def upload_and_run(
     preset_obj = StylePresetRegistry.get_preset(style_preset)
     dep_profile = DeploymentProfile.COMMERCIAL if profile == "commercial" else DeploymentProfile.RESEARCH
 
-    config = TalePipelineConfig(
-        story_path=story_file,
-        characters_dir=chars_dir,
-        output_dir=output_dir,
-        profile=dep_profile,
-        territory=territory,
-        style_preset=style_preset,
-        style_suffix=preset_obj.prompt_suffix,
-        enable_bedrock=False,
-        enable_h3_local=False,
-        generate_subtitles=True
+    return _enqueue_or_503(
+        _generation_payload(
+            story_id=story_id,
+            story_path=story_file,
+            characters_dir=chars_dir,
+            output_dir=output_dir,
+            profile=dep_profile,
+            territory=territory,
+            style_preset=style_preset,
+            style_suffix=preset_obj.prompt_suffix,
+        )
     )
 
-    state = AnimatedTalePipelineRunner.run_pipeline(config=config, use_mock_video=True)
-    return {
-        "status": state.get("status"),
-        "story_id": story_id,
-        "total_segments": len(state.get("validated_storyboard").segments) if state.get("validated_storyboard") else 0,
-        "video_url": f"/api/media/{story_id}/video",
-        "subtitles_srt_url": f"/api/media/{story_id}/subtitles/srt",
-        "subtitles_ass_url": f"/api/media/{story_id}/subtitles/ass",
-        "report_path": str(state.get("run_report_path"))
-    }
 
-
-@app.post("/api/generate")
+@app.post("/api/generate", status_code=202)
 def trigger_generation(req: TaleRunRequest, _: None = Depends(require_api_key)):
     """Déclenche la génération d'un conte animé (JSON payload)."""
     output_dir = _run_dir(req.story_id)
@@ -406,26 +442,39 @@ def trigger_generation(req: TaleRunRequest, _: None = Depends(require_api_key)):
     preset_obj = StylePresetRegistry.get_preset(req.style_preset)
     profile = DeploymentProfile.COMMERCIAL if req.profile == "commercial" else DeploymentProfile.RESEARCH
 
-    config = TalePipelineConfig(
-        story_path=story_file,
-        characters_dir=chars_dir,
-        output_dir=output_dir,
-        profile=profile,
-        territory=req.territory,
-        style_preset=req.style_preset,
-        style_suffix=req.style_suffix or preset_obj.prompt_suffix,
-        enable_bedrock=False,
-        enable_h3_local=False
+    return _enqueue_or_503(
+        _generation_payload(
+            story_id=req.story_id,
+            story_path=story_file,
+            characters_dir=chars_dir,
+            output_dir=output_dir,
+            profile=profile,
+            territory=req.territory,
+            style_preset=req.style_preset,
+            style_suffix=req.style_suffix or preset_obj.prompt_suffix,
+        )
     )
 
-    state = AnimatedTalePipelineRunner.run_pipeline(config=config, use_mock_video=True)
-    return {
-        "status": state.get("status"),
-        "story_id": req.story_id,
-        "total_segments": len(state.get("validated_storyboard").segments) if state.get("validated_storyboard") else 0,
-        "video_path": str(state.get("final_video_path")),
-        "report_path": str(state.get("run_report_path"))
-    }
+
+@app.get("/api/jobs/{job_id}")
+def get_generation_job(job_id: str) -> dict[str, Any]:
+    """Retourne l'état durable d'une génération asynchrone."""
+    try:
+        return job_response(get_job(job_id))
+    except (NoSuchJobError, RedisError) as exc:
+        raise HTTPException(status_code=404, detail="Job introuvable ou file indisponible.") from exc
+
+
+@app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_api_key)])
+def cancel_generation_job(job_id: str) -> dict[str, Any]:
+    """Annule un job encore en file ; un rendu déjà démarré reste non interruptible."""
+    try:
+        result = cancel_job(job_id)
+    except (NoSuchJobError, RedisError) as exc:
+        raise HTTPException(status_code=404, detail="Job introuvable ou file indisponible.") from exc
+    if not result["cancelled"]:
+        raise HTTPException(status_code=409, detail="Le job est déjà démarré ou terminé.")
+    return {"job_id": job_id, **result}
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -229,7 +229,12 @@ Accédez au tableau de bord sur : **`http://localhost:8000`**
 - `GET /api/runs/{story_id}/storyboard` : Storyboard validé et timeline des scènes.
 - `GET /api/runs/{story_id}/qc` : Rapports d'évaluation DINOv2 / WER.
 - `GET /api/runs/{story_id}/manifest` : Flux d'événements du Render Manifest JSONL.
-- `POST /api/generate` : Déclenchement d'un nouveau run de génération.
+- `POST /api/generate` : Place un nouveau run en file et retourne immédiatement un `job_id` (`202 Accepted`).
+- `POST /api/upload-and-run` : Importe les entrées puis place la génération en file (`202 Accepted`).
+- `GET /api/jobs/{job_id}` : État durable, progression et résultat d'un job.
+- `POST /api/jobs/{job_id}/cancel` : Annule un job encore en attente (clé API requise).
+
+La pile Docker démarre Redis et un worker RQ séparé : le serveur HTTP ne calcule jamais une génération vidéo dans son propre processus. Réglez `MANGA_STUDIO_REDIS_URL`, `MANGA_STUDIO_QUEUE_NAME` et `MANGA_STUDIO_JOB_TIMEOUT_SECONDS` si votre infrastructure Redis est externe.
 
 ---
 

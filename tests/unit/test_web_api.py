@@ -1,9 +1,15 @@
 """Tests unitaires pour l'API REST et le tableau de bord FastAPI."""
 
-from fastapi.testclient import TestClient
-from manga_studio.api.app import app
+import importlib
 
-client = TestClient(app)
+from fastapi.testclient import TestClient
+
+api_module = importlib.import_module("manga_studio.api.app")
+client = TestClient(api_module.app)
+
+
+class FakeJob:
+    id = "job-test-123"
 
 
 def test_api_status_endpoint():
@@ -23,16 +29,33 @@ def test_api_dashboard_html():
     assert "Mode « Conte animé »" in res.text
 
 
-def test_api_generate_endpoint():
-    """Vérifie le déclenchement d'un run via l'API REST."""
+def test_api_generate_enqueues_a_job(monkeypatch):
+    """La requête HTTP retourne rapidement un job au lieu d'exécuter le pipeline."""
+    monkeypatch.setattr(api_module, "enqueue_generation", lambda payload: FakeJob())
     payload = {
         "tale_text": "Râ monta dans sa barque céleste.\n\nLes dieux applaudirent avec ferveur.",
         "story_id": "api_test_story",
         "profile": "research",
-        "territory": "EU"
+        "territory": "EU",
     }
+
     res = client.post("/api/generate", json=payload)
+
+    assert res.status_code == 202
+    assert res.json() == {
+        "job_id": "job-test-123",
+        "status": "queued",
+        "story_id": "api_test_story",
+        "status_url": "/api/jobs/job-test-123",
+    }
+
+
+def test_get_generation_job_returns_serialized_status(monkeypatch):
+    expected = {"job_id": "job-test-123", "status": "running", "progress": 5}
+    monkeypatch.setattr(api_module, "get_job", lambda job_id: FakeJob())
+    monkeypatch.setattr(api_module, "job_response", lambda job: expected)
+
+    res = client.get("/api/jobs/job-test-123")
+
     assert res.status_code == 200
-    data = res.json()
-    assert data["story_id"] == "api_test_story"
-    assert data["status"] in ("COMPLETED", "COMPLETED_WITH_WARNINGS")
+    assert res.json() == expected

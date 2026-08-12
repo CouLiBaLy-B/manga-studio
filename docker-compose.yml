@@ -1,7 +1,15 @@
 version: '3.8'
 
 services:
-  # Frontend Next.js 14 Dashboard
+  redis:
+    image: redis:7-alpine
+    container_name: mangatok-studio-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # Frontend Next.js Dashboard
   manga-studio-frontend:
     build:
       context: ./frontend
@@ -23,6 +31,8 @@ services:
     container_name: mangatok-studio-app
     ports:
       - "8000:8000"
+    depends_on:
+      - redis
     environment:
       - DEPLOYMENT_PROFILE=research
       - TERRITORY=EU
@@ -37,6 +47,7 @@ services:
       - MANGA_STUDIO_CORS_ORIGINS=${MANGA_STUDIO_CORS_ORIGINS:-http://localhost:3000}
       - MANGA_STUDIO_OUTPUT_ROOT=/app/output
       - MANGA_STUDIO_FIXTURES_ROOT=/app/fixtures
+      - MANGA_STUDIO_REDIS_URL=redis://redis:6379/0
     volumes:
       - ./output:/app/output
       - ./demo_output:/app/demo_output
@@ -48,6 +59,25 @@ services:
       timeout: 5s
       retries: 3
 
+  manga-studio-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mangatok-studio-worker
+    command: rq worker manga-studio
+    depends_on:
+      - redis
+    environment:
+      - MANGA_STUDIO_ENV=production
+      - MANGA_STUDIO_REDIS_URL=redis://redis:6379/0
+      - MANGA_STUDIO_QUEUE_NAME=manga-studio
+      - MANGA_STUDIO_OUTPUT_ROOT=/app/output
+      - MANGA_STUDIO_FIXTURES_ROOT=/app/fixtures
+    volumes:
+      - ./output:/app/output
+      - ./tests/fixtures:/app/fixtures:ro
+    restart: unless-stopped
+
   # Service GPU Accéléré (RTX 4090 / CUDA 12.4)
   manga-studio-gpu:
     build:
@@ -56,6 +86,8 @@ services:
     container_name: mangatok-studio-gpu
     ports:
       - "8001:8000"
+    depends_on:
+      - redis
     environment:
       - DEPLOYMENT_PROFILE=research
       - TERRITORY=EU
@@ -69,6 +101,7 @@ services:
       - MANGA_STUDIO_API_KEY=${MANGA_STUDIO_API_KEY:?MANGA_STUDIO_API_KEY must be set}
       - MANGA_STUDIO_CORS_ORIGINS=${MANGA_STUDIO_CORS_ORIGINS:-http://localhost:3000}
       - MANGA_STUDIO_OUTPUT_ROOT=/app/output
+      - MANGA_STUDIO_REDIS_URL=redis://redis:6379/0
     volumes:
       - ./output:/app/output
       - ./demo_output:/app/demo_output
@@ -82,3 +115,6 @@ services:
     restart: unless-stopped
     profiles:
       - gpu
+
+volumes:
+  redis_data:
