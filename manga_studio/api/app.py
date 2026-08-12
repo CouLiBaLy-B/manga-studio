@@ -1,11 +1,14 @@
 """API Web FastAPI et gestionnaire de médias pour MangaTok Studio."""
 
+import hmac
 import json
+import os
+import re
 import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -18,6 +21,12 @@ from manga_studio.core.multiformat_exporter import MultiFormatExporter
 from manga_studio.core.prompt_builder import PromptBuilder
 from manga_studio.core.social_metadata import SocialMetadataGenerator
 from manga_studio.core.style_presets import StylePresetRegistry
+from manga_studio.core.runtime_config import (
+    ENVIRONMENT,
+    FIXTURES_ROOT,
+    OUTPUT_ROOT,
+    configured_cors_origins,
+)
 from manga_studio.pipeline.runner import AnimatedTalePipelineRunner
 
 app = FastAPI(
@@ -28,18 +37,66 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=configured_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
-BASE_DIR = Path("/home/user/manga-studio")
-DEFAULT_OUTPUT_DIR = BASE_DIR / "demo_output"
+STORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/webp"}
+ALLOWED_SUBTITLE_EXTENSIONS = {"srt", "ass"}
+MAX_CHARACTER_FILES = 9
+MAX_UPLOAD_BYTES = int(os.getenv("MANGA_STUDIO_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+MAX_TALE_CHARACTERS = int(os.getenv("MANGA_STUDIO_MAX_TALE_CHARACTERS", "100000"))
+
+
+def _validated_story_id(story_id: str) -> str:
+    """Valide un identifiant de run avant toute construction de chemin."""
+    if not STORY_ID_PATTERN.fullmatch(story_id):
+        raise HTTPException(
+            status_code=422,
+            detail="story_id invalide : utilisez 1 à 64 caractères alphanumériques, '-' ou '_'.",
+        )
+    return story_id
+
+
+def _run_dir(story_id: str) -> Path:
+    """Construit un répertoire de run garanti contenu dans OUTPUT_ROOT."""
+    safe_story_id = _validated_story_id(story_id)
+    root = OUTPUT_ROOT.resolve()
+    run_dir = (root / safe_story_id).resolve()
+    if not run_dir.is_relative_to(root):  # Défense en profondeur malgré la whitelist.
+        raise HTTPException(status_code=422, detail="Répertoire de run invalide.")
+    return run_dir
+
+
+def _existing_run_dir(story_id: str) -> Path:
+    run_dir = _run_dir(story_id)
+    if not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Run non trouvé")
+    return run_dir
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
+    """Protège les opérations mutables par une clé fournie via X-API-Key.
+
+    En production, l'absence de clé configurée bloque le service plutôt que de
+    l'exposer accidentellement. Le mode development explicite conserve la
+    simplicité de l'exécution locale.
+    """
+    expected_key = os.getenv("MANGA_STUDIO_API_KEY")
+    if not expected_key:
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=503, detail="Clé API de production non configurée.")
+        return
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected_key):
+        raise HTTPException(status_code=401, detail="Clé API invalide ou absente.")
 
 
 class TaleRunRequest(BaseModel):
-    tale_text: str = Field(..., min_length=10, description="Texte du conte en français")
+    tale_text: str = Field(..., min_length=10, max_length=MAX_TALE_CHARACTERS, description="Texte du conte en français")
     story_id: str = Field(default="conte_web", description="Identifiant unique du conte")
     profile: str = Field(default="research", description="research ou commercial")
     territory: str = Field(default="EU", description="Code territoire ISO")
@@ -79,7 +136,7 @@ def get_status() -> Dict[str, Any]:
 @app.get("/api/runs/{story_id}/bible")
 def get_character_bible(story_id: str):
     """Retourne la bible canonique verrouillée du run."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     bible_path = run_dir / "character_bible.json"
     if not bible_path.exists():
         raise HTTPException(status_code=404, detail="Bible non trouvée")
@@ -89,7 +146,7 @@ def get_character_bible(story_id: str):
 @app.get("/api/runs/{story_id}/storyboard")
 def get_storyboard(story_id: str):
     """Retourne le storyboard validé du run."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     sb_path = run_dir / "storyboard.validated.json"
     if not sb_path.exists():
         sb_path = run_dir / "storyboard.json"
@@ -99,9 +156,14 @@ def get_storyboard(story_id: str):
 
 
 @app.put("/api/runs/{story_id}/segments/{scene_id}")
-def update_segment(story_id: str, scene_id: str, req: SegmentUpdateRequest):
+def update_segment(
+    story_id: str,
+    scene_id: str,
+    req: SegmentUpdateRequest,
+    _: None = Depends(require_api_key),
+):
     """Met à jour un segment du storyboard (Human-in-the-Loop)."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     sb_path = run_dir / "storyboard.validated.json"
     if not sb_path.exists():
         sb_path = run_dir / "storyboard.json"
@@ -146,9 +208,13 @@ def update_segment(story_id: str, scene_id: str, req: SegmentUpdateRequest):
 
 
 @app.post("/api/runs/{story_id}/reorder")
-def reorder_segments(story_id: str, req: SegmentsReorderRequest):
+def reorder_segments(
+    story_id: str,
+    req: SegmentsReorderRequest,
+    _: None = Depends(require_api_key),
+):
     """Réordonne les segments du storyboard."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     sb_path = run_dir / "storyboard.validated.json"
     if not sb_path.exists():
         sb_path = run_dir / "storyboard.json"
@@ -175,7 +241,7 @@ def reorder_segments(story_id: str, req: SegmentsReorderRequest):
 @app.get("/api/runs/{story_id}/qc")
 def get_qc_reports(story_id: str):
     """Retourne l'ensemble des rapports QC du run."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     qc_dir = run_dir / "qc"
     if not qc_dir.exists():
         return []
@@ -188,7 +254,7 @@ def get_qc_reports(story_id: str):
 @app.get("/api/runs/{story_id}/manifest")
 def get_manifest_events(story_id: str):
     """Retourne le flux des événements de traçabilité."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     manifest_file = run_dir / "manifests" / "render_manifest.jsonl"
     if not manifest_file.exists():
         return []
@@ -202,7 +268,7 @@ def get_manifest_events(story_id: str):
 @app.get("/api/runs/{story_id}/social")
 def get_social_metadata(story_id: str):
     """Génère et retourne les métadonnées virales (TikTok, YouTube Shorts, Instagram)."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     sb_path = run_dir / "storyboard.validated.json"
     bible_path = run_dir / "character_bible.json"
     if not sb_path.exists() or not bible_path.exists():
@@ -217,7 +283,7 @@ def get_social_metadata(story_id: str):
 @app.get("/api/media/{story_id}/video")
 def get_final_video(story_id: str):
     """Sert la vidéo finale assemblée."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    run_dir = _existing_run_dir(story_id)
     video_path = run_dir / "conte_final.mp4"
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Vidéo finale non trouvée")
@@ -227,7 +293,9 @@ def get_final_video(story_id: str):
 @app.get("/api/media/{story_id}/subtitles/{ext}")
 def get_subtitles_file(story_id: str, ext: str):
     """Sert les sous-titres SRT ou ASS."""
-    run_dir = BASE_DIR / "output" / story_id if (BASE_DIR / "output" / story_id).exists() else DEFAULT_OUTPUT_DIR
+    if ext not in ALLOWED_SUBTITLE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Format de sous-titre non pris en charge")
+    run_dir = _existing_run_dir(story_id)
     sub_path = run_dir / "subtitles" / f"conte.{ext}"
     if not sub_path.exists():
         raise HTTPException(status_code=404, detail=f"Sous-titre .{ext} introuvable")
@@ -237,6 +305,7 @@ def get_subtitles_file(story_id: str, ext: str):
 
 @app.post("/api/upload-and-run")
 async def upload_and_run(
+    _: None = Depends(require_api_key),
     story_id: str = Form("conte_custom"),
     tale_text: str = Form(...),
     profile: str = Form("research"),
@@ -245,7 +314,10 @@ async def upload_and_run(
     character_files: List[UploadFile] = File(default=[])
 ):
     """Endpoint complet d'importation de fichiers et de lancement de génération."""
-    output_dir = BASE_DIR / "output" / story_id
+    if len(tale_text) > MAX_TALE_CHARACTERS:
+        raise HTTPException(status_code=413, detail="Texte du conte trop volumineux.")
+
+    output_dir = _run_dir(story_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Sauvegarde du texte
@@ -256,15 +328,31 @@ async def upload_and_run(
     chars_dir = output_dir / "personnages"
     chars_dir.mkdir(parents=True, exist_ok=True)
 
+    if len(character_files) > MAX_CHARACTER_FILES:
+        raise HTTPException(status_code=422, detail=f"Maximum {MAX_CHARACTER_FILES} images de personnages autorisées.")
+
     if character_files:
-        for idx, f in enumerate(character_files, start=1):
-            if f.filename:
-                target_file = chars_dir / f.filename
-                with target_file.open("wb") as out_f:
-                    shutil.copyfileobj(f.file, out_f)
+        for f in character_files:
+            if not f.filename:
+                continue
+            filename = Path(f.filename).name
+            suffix = Path(filename).suffix.lower()
+            if suffix not in ALLOWED_IMAGE_EXTENSIONS or f.content_type not in ALLOWED_IMAGE_MEDIA_TYPES:
+                raise HTTPException(status_code=422, detail="Format image non pris en charge.")
+
+            content = await f.read(MAX_UPLOAD_BYTES + 1)
+            if len(content) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Image trop volumineuse.")
+            if not content:
+                raise HTTPException(status_code=422, detail="Image vide.")
+
+            target_file = (chars_dir / filename).resolve()
+            if not target_file.is_relative_to(chars_dir.resolve()):
+                raise HTTPException(status_code=422, detail="Nom de fichier invalide.")
+            target_file.write_bytes(content)
     else:
         # Copie des fixtures par défaut si aucun upload
-        fixture_chars = BASE_DIR / "tests" / "fixtures" / "personnages"
+        fixture_chars = FIXTURES_ROOT / "personnages"
         if fixture_chars.exists():
             for p in fixture_chars.glob("*.png"):
                 shutil.copy(p, chars_dir / p.name)
@@ -298,15 +386,15 @@ async def upload_and_run(
 
 
 @app.post("/api/generate")
-def trigger_generation(req: TaleRunRequest):
+def trigger_generation(req: TaleRunRequest, _: None = Depends(require_api_key)):
     """Déclenche la génération d'un conte animé (JSON payload)."""
-    output_dir = BASE_DIR / "output" / req.story_id
+    output_dir = _run_dir(req.story_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     story_file = output_dir / "conte.txt"
     story_file.write_text(req.tale_text, encoding="utf-8")
 
-    chars_dir = BASE_DIR / "tests" / "fixtures" / "personnages"
+    chars_dir = FIXTURES_ROOT / "personnages"
     preset_obj = StylePresetRegistry.get_preset(req.style_preset)
     profile = DeploymentProfile.COMMERCIAL if req.profile == "commercial" else DeploymentProfile.RESEARCH
 
@@ -334,16 +422,13 @@ def trigger_generation(req: TaleRunRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
-    """Redirection vers le dashboard Next.js ou vue d'accueil API."""
+    """Page d'accueil de l'API, sans redirection vers un localhost du serveur."""
     return """<!DOCTYPE html>
-<html>
-<head>
-  <meta http-equiv="refresh" content="0; url=http://localhost:3000/" />
-  <title>MangaTok Studio — Mode « Conte animé »</title>
-</head>
+<html lang="fr">
+<head><title>MangaTok Studio API</title></head>
 <body style="background:#090A0F; color:#FFF; font-family:sans-serif; text-align:center; padding:50px;">
-  <h1>⚡ MangaTok Studio — Mode « Conte animé »</h1>
-  <p>Accédez à l'interface Next.js sur <a href="http://localhost:3000" style="color:#F4C542;">http://localhost:3000</a></p>
+  <h1>⚡ MangaTok Studio — Mode « Conte animé » API</h1>
+  <p>Le dashboard est servi séparément par le frontend configuré pour cet environnement.</p>
   <p><a href="/docs" style="color:#3B82F6;">Documentation Swagger API</a></p>
 </body>
 </html>"""

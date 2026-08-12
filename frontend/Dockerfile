@@ -1,9 +1,12 @@
 FROM node:20-alpine AS base
 
+ARG BACKEND_URL=http://127.0.0.1:8000
+ENV BACKEND_URL=${BACKEND_URL}
+
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . ./
 RUN npm run build

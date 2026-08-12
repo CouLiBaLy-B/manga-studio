@@ -6,6 +6,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        BACKEND_URL: http://manga-studio-app:8000
     container_name: mangatok-studio-frontend
     ports:
       - "3000:3000"
@@ -30,6 +32,11 @@ services:
       - MAX_MONTHLY_BUDGET_USD=10.0
       - MAX_RUN_BUDGET_USD=2.0
       - VRAM_CEILING_GB=22.0
+      - MANGA_STUDIO_ENV=production
+      - MANGA_STUDIO_API_KEY=${MANGA_STUDIO_API_KEY:?MANGA_STUDIO_API_KEY must be set}
+      - MANGA_STUDIO_CORS_ORIGINS=${MANGA_STUDIO_CORS_ORIGINS:-http://localhost:3000}
+      - MANGA_STUDIO_OUTPUT_ROOT=/app/output
+      - MANGA_STUDIO_FIXTURES_ROOT=/app/fixtures
     volumes:
       - ./output:/app/output
       - ./demo_output:/app/demo_output
@@ -58,6 +65,10 @@ services:
       - VRAM_CEILING_GB=22.0
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
+      - MANGA_STUDIO_ENV=production
+      - MANGA_STUDIO_API_KEY=${MANGA_STUDIO_API_KEY:?MANGA_STUDIO_API_KEY must be set}
+      - MANGA_STUDIO_CORS_ORIGINS=${MANGA_STUDIO_CORS_ORIGINS:-http://localhost:3000}
+      - MANGA_STUDIO_OUTPUT_ROOT=/app/output
     volumes:
       - ./output:/app/output
       - ./demo_output:/app/demo_output

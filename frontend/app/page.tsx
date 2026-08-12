@@ -53,6 +53,7 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
   const [stylePreset, setStylePreset] = useState('watercolor_mythology');
   const [deploymentProfile, setDeploymentProfile] = useState('research');
   const [territory, setTerritory] = useState('EU');
+  const [apiKey, setApiKey] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   
@@ -150,6 +151,8 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
     }
   };
 
+  const protectedHeaders = () => apiKey ? { 'X-API-Key': apiKey } : {};
+
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
     setCopiedKey(key);
@@ -198,6 +201,7 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
 
       const res = await fetch('/api/upload-and-run', {
         method: 'POST',
+        headers: protectedHeaders(),
         body: formData,
       });
 
@@ -235,7 +239,7 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
     try {
       const res = await fetch(`/api/runs/${storyId}/segments/${sceneId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...protectedHeaders() },
         body: JSON.stringify(editForm),
       });
       if (res.ok) {
@@ -261,7 +265,7 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
     try {
       await fetch(`/api/runs/${storyId}/reorder`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...protectedHeaders() },
         body: JSON.stringify({ scene_ids_in_order: sceneIds }),
       });
       await fetchRunData(storyId);
@@ -521,6 +525,20 @@ La barque d'or quitta doucement la rive sacrée pour s'élever au milieu des con
                       <option value="JP">Japon (JP)</option>
                     </select>
                   </div>
+                </div>
+
+                <div className="pt-3">
+                  <label htmlFor="api-key" className="text-[11px] font-mono text-zinc-400 block mb-1">Clé API</label>
+                  <input
+                    id="api-key"
+                    type="password"
+                    autoComplete="off"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Requise par un serveur protégé"
+                    className="w-full bg-[#07080d] border border-white/[0.08] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-amber-400 font-mono"
+                  />
+                  <p className="mt-1 text-[10px] text-zinc-500">Utilisée uniquement pour les opérations protégées et jamais enregistrée par le dashboard.</p>
                 </div>
 
                 {/* Bouton de génération principal */}

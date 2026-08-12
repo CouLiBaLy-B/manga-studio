@@ -191,10 +191,15 @@ Le projet propose une pile Docker Compose multi-environnements :
 
 ### 1. Démarrer le service applicatif standard (Port 8000)
 ```bash
+# Créez votre configuration locale et remplacez la clé exemple
+cp .env.example .env
+# Puis démarrez l'API et le dashboard
 make docker-up
 # ou
 docker compose up -d manga-studio-app
 ```
+
+> **Sécurité :** en Docker, les opérations de génération et d'édition exigent la valeur `MANGA_STUDIO_API_KEY` dans l'en-tête `X-API-Key`. Le dashboard propose un champ de saisie de cette clé, qui n'est pas persistée. Configurez les origines navigateur autorisées avec `MANGA_STUDIO_CORS_ORIGINS`; ne déployez jamais avec un wildcard CORS.
 
 ### 2. Démarrer avec accélération NVIDIA CUDA (RTX 4090 / Port 8001)
 ```bash
