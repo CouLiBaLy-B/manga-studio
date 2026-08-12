@@ -34,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = Path("/home/user/manga-studio")
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_OUTPUT_DIR = BASE_DIR / "demo_output"
 
 
