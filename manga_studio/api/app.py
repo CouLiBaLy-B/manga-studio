@@ -6,10 +6,12 @@ from io import BytesIO
 import os
 import re
 import shutil
+import time
 import uuid
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from redis.exceptions import RedisError
 from rq.exceptions import NoSuchJobError
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +27,7 @@ from manga_studio.core.multiformat_exporter import MultiFormatExporter
 from manga_studio.core.prompt_builder import PromptBuilder
 from manga_studio.core.social_metadata import SocialMetadataGenerator
 from manga_studio.core.style_presets import StylePresetRegistry
+from manga_studio.core.rate_limit import RateLimiterUnavailable, enforce_rate_limit
 from manga_studio.core.runtime_config import (
     ENVIRONMENT,
     FIXTURES_ROOT,
@@ -33,10 +36,12 @@ from manga_studio.core.runtime_config import (
 )
 from manga_studio.jobs import cancel_job, enqueue_generation, get_job, job_response
 
+logger = logging.getLogger("manga_studio.api")
+
 app = FastAPI(
     title="MangaTok Studio — Mode « Conte animé » API",
     description="Service de génération vidéo TikTok/Reels avec cohérence visuelle et fiches canoniques",
-    version="1.2.0"
+    version="1.3.0"
 )
 
 app.add_middleware(
@@ -46,6 +51,26 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Content-Type", "X-API-Key"],
 )
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """Ajoute une corrélation de requête et un journal exploitable sans secrets."""
+    request_id = str(uuid.uuid4())
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "request_completed request_id=%s method=%s path=%s status=%s duration_ms=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
 
 STORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -97,6 +122,14 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
         return
     if not x_api_key or not hmac.compare_digest(x_api_key, expected_key):
         raise HTTPException(status_code=401, detail="Clé API invalide ou absente.")
+    try:
+        enforce_rate_limit(x_api_key)
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except RateLimiterUnavailable as exc:
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=503, detail="Rate limiter indisponible.") from exc
+        logger.warning("Rate limiter indisponible en développement : %s", exc)
 
 
 class TaleRunRequest(BaseModel):
@@ -167,8 +200,9 @@ def get_status() -> Dict[str, Any]:
     return {
         "status": "HEALTHY",
         "mode": "Conte animé",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "gpu_ceiling_gb": 22.0,
+        "job_queue": "redis-rq",
         "default_profile": "research",
         "human_in_the_loop_enabled": True,
         "style_presets": [p.model_dump() for p in StylePresetRegistry.list_presets().values()]

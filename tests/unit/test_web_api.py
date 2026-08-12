@@ -19,6 +19,8 @@ def test_api_status_endpoint():
     data = res.json()
     assert data["status"] == "HEALTHY"
     assert data["gpu_ceiling_gb"] == 22.0
+    assert data["job_queue"] == "redis-rq"
+    assert res.headers["X-Request-ID"]
 
 
 def test_api_dashboard_html():

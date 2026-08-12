@@ -48,6 +48,7 @@ services:
       - MANGA_STUDIO_OUTPUT_ROOT=/app/output
       - MANGA_STUDIO_FIXTURES_ROOT=/app/fixtures
       - MANGA_STUDIO_REDIS_URL=redis://redis:6379/0
+      - MANGA_STUDIO_API_RATE_LIMIT_PER_MINUTE=${MANGA_STUDIO_API_RATE_LIMIT_PER_MINUTE:-30}
     volumes:
       - ./output:/app/output
       - ./demo_output:/app/demo_output
