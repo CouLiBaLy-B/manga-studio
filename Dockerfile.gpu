@@ -37,7 +37,7 @@ WORKDIR /app
 COPY pyproject.toml pytest.ini ./
 
 # Installation des dépendances Python & PyTorch CUDA 12.4
-RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel python-multipart && \
     python3 -m pip install --no-cache-dir \
         torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
     python3 -m pip install --no-cache-dir \

@@ -21,7 +21,7 @@ install: ## Installe le package et ses dépendances de base
 dev-install: ## Installe toutes les dépendances de développement et de test
 	@echo "==> Installation des dépendances de développement..."
 	$(PIP) install -e .
-	$(PIP) install pytest pytest-cov httpx fastapi uvicorn pillow jinja2 pydantic
+	$(PIP) install pytest pytest-cov httpx fastapi uvicorn pillow jinja2 pydantic python-multipart
 
 .PHONY: test
 test: ## Exécute la suite complète de tests hors-ligne

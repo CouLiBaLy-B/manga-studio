@@ -31,7 +31,8 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
         pillow>=9.0.0 \
         jinja2>=3.0.0 \
         pytest>=7.0.0 \
-        pytest-cov>=4.0.0
+        pytest-cov>=4.0.0 \
+        python-multipart
 
 # Copie du code source et des artefacts
 COPY manga_studio/ ./manga_studio/
