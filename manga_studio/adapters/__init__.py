@@ -6,6 +6,8 @@ from .storyboard.bedrock_glm5_adapter import BedrockGLM5StoryboardAdapter
 from .storyboard.local_fallback_adapter import LocalStoryboardFallbackAdapter
 from .video.minimax_h3_adapter import MiniMaxH3VideoAdapter
 from .video.mock_video_adapter import MockVideoGeneratorAdapter
+from .video.modular_video_tts_adapter import ModularVideoTTSAdapter
+from .audio.french_tts_adapter import FrenchTTSAdapter
 from .qc.clip_dino_qc_adapter import ClipOrDinoQualityEvaluatorAdapter
 from .qc.mock_qc_adapter import MockQualityEvaluatorAdapter
 from .assembly.ffmpeg_assembler_adapter import FFmpegVideoAssemblerAdapter
@@ -21,6 +23,8 @@ __all__ = [
     "LocalStoryboardFallbackAdapter",
     "MiniMaxH3VideoAdapter",
     "MockVideoGeneratorAdapter",
+    "ModularVideoTTSAdapter",
+    "FrenchTTSAdapter",
     "ClipOrDinoQualityEvaluatorAdapter",
     "MockQualityEvaluatorAdapter",
     "FFmpegVideoAssemblerAdapter",

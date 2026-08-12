@@ -8,3 +8,4 @@ htmlcov/
 dist/
 build/
 demo_output/
+output/
