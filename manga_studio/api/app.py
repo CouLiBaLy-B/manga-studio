@@ -224,17 +224,25 @@ def reorder_segments(
     sb_data = json.loads(sb_path.read_text(encoding="utf-8"))
     storyboard = Storyboard.model_validate(sb_data)
     seg_map = {s.scene_id: s for s in storyboard.segments}
+    requested_ids = req.scene_ids_in_order
+
+    if len(requested_ids) != len(seg_map) or set(requested_ids) != set(seg_map):
+        raise HTTPException(
+            status_code=422,
+            detail="Le réordonnancement doit contenir chaque scène exactement une fois.",
+        )
 
     new_segments = []
-    for idx, sid in enumerate(req.scene_ids_in_order, start=1):
-        if sid in seg_map:
-            seg = seg_map[sid]
-            seg.ordre = idx
-            new_segments.append(seg)
+    for idx, sid in enumerate(requested_ids, start=1):
+        seg = seg_map[sid]
+        seg.ordre = idx
+        new_segments.append(seg)
 
     storyboard.segments = new_segments
     revalidated = storyboard.model_validate(storyboard.model_dump())
-    sb_path.write_text(revalidated.model_dump_json(indent=2), encoding="utf-8")
+    tmp_path = sb_path.with_suffix(f"{sb_path.suffix}.tmp")
+    tmp_path.write_text(revalidated.model_dump_json(indent=2), encoding="utf-8")
+    tmp_path.replace(sb_path)
     return {"status": "REORDERED", "total_segments": len(new_segments)}
 
 

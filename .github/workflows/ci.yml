@@ -1,0 +1,79 @@
+name: MangaTok Studio CI
+
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+    branches: [main, 'arena/**']
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend quality (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsndfile1
+      - name: Install application and development dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e '.[dev]'
+      - name: Validate imports and schemas
+        run: |
+          python -c "
+          from manga_studio.core.models.character import CharacterBible, CharacterSheet
+          from manga_studio.core.models.qc import QCReport
+          from manga_studio.core.models.storyboard import Storyboard
+          print('Domain models imported successfully.')
+          "
+      - name: Run tests with coverage
+        run: pytest --cov=manga_studio --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+      - name: Verify end-to-end CLI run
+        run: |
+          python -m manga_studio.cli.main \
+            --story tests/fixtures/conte.txt \
+            --characters-dir tests/fixtures/personnages \
+            --output-dir ci_demo_output \
+            --profile research \
+            --territory EU \
+            --use-mock-video
+          test -f ci_demo_output/conte_final.mp4
+          test -f ci_demo_output/manifests/run_report.json
+          test -f ci_demo_output/subtitles/conte.srt
+
+  frontend:
+    name: Frontend build and dependency audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Build production frontend
+        run: npm run build
+      - name: Reject high and critical dependency vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
